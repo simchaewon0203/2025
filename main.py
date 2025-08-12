@@ -3,195 +3,299 @@ import random
 import math
 import streamlit.components.v1 as components
 
-st.set_page_config(page_title="Streamlit Brick Breaker", layout="centered")
+# Streamlit Turn-Based Shooter
+st.set_page_config(page_title="Turn-Based Shooter", layout="centered")
 
 # --- settings ---
-GRID_W = 12
-GRID_H = 16
-BRICK_ROWS = 4
-PADDLE_WIDTH = 5
-CELL_SIZE = 28  # pixels
+GRID_W = 10
+GRID_H = 10
+INITIAL_ENEMIES = 4
+PLAYER_MAX_HP = 5
 
-# --- initialize session state ---
-if "bricks" not in st.session_state:
-    st.session_state.bricks = {(r, c) for r in range(BRICK_ROWS) for c in range(GRID_W)}
-if "ball_x" not in st.session_state:
-    st.session_state.ball_x = GRID_W // 2
-if "ball_y" not in st.session_state:
-    st.session_state.ball_y = BRICK_ROWS + 3
-if "vel_x" not in st.session_state:
-    st.session_state.vel_x = random.choice([-1, 1])
-if "vel_y" not in st.session_state:
-    st.session_state.vel_y = -1
-if "paddle_x" not in st.session_state:
-    st.session_state.paddle_x = (GRID_W - PADDLE_WIDTH) // 2
+# --- session state init ---
+if "player" not in st.session_state:
+    st.session_state.player = {"x": GRID_W // 2, "y": GRID_H - 1, "hp": PLAYER_MAX_HP}
+if "enemies" not in st.session_state:
+    # enemy: dict with x,y,hp,id
+    st.session_state.enemies = []
+if "bullets" not in st.session_state:
+    # bullet: dict with x,y,dx,dy,owner ('player' or 'enemy')
+    st.session_state.bullets = []
 if "score" not in st.session_state:
     st.session_state.score = 0
-if "lives" not in st.session_state:
-    st.session_state.lives = 3
-if "running_steps" not in st.session_state:
-    st.session_state.running_steps = 0
-if "level" not in st.session_state:
-    st.session_state.level = 1
+if "turn" not in st.session_state:
+    st.session_state.turn = 1
+if "msg" not in st.session_state:
+    st.session_state.msg = "게임 시작!"
+if "enemy_count" not in st.session_state:
+    st.session_state.enemy_count = INITIAL_ENEMIES
+if "game_over" not in st.session_state:
+    st.session_state.game_over = False
 
-# --- game logic ---
-def reset_ball():
-    st.session_state.ball_x = GRID_W // 2
-    st.session_state.ball_y = BRICK_ROWS + 3
-    st.session_state.vel_x = random.choice([-1, 1])
-    st.session_state.vel_y = -1
+# utility
 
-
-def advance_step():
-    # move ball step-by-step with collision detection
-    x = st.session_state.ball_x
-    y = st.session_state.ball_y
-    vx = st.session_state.vel_x
-    vy = st.session_state.vel_y
-
-    nx = x + vx
-    ny = y + vy
-
-    # wall collisions (left/right/top)
-    if nx < 0:
-        nx = 0
-        vx *= -1
-    if nx >= GRID_W:
-        nx = GRID_W - 1
-        vx *= -1
-    if ny < 0:
-        ny = 0
-        vy *= -1
-
-    # brick collision
-    if (ny, nx) in st.session_state.bricks:
-        st.session_state.bricks.remove((ny, nx))
-        st.session_state.score += 10
-        vy *= -1
-        # small chance to change horizontal direction
-        if random.random() < 0.2:
-            vx *= -1
-
-    # paddle collision
-    paddle_row = GRID_H - 1
-    if ny == paddle_row:
-        if st.session_state.paddle_x <= nx < st.session_state.paddle_x + PADDLE_WIDTH:
-            # reflect ball
-            vy *= -1
-            # change horizontal velocity based on hit position
-            hit_pos = nx - st.session_state.paddle_x
-            center = (PADDLE_WIDTH - 1) / 2
-            delta = (hit_pos - center)
-            # scale delta to -1..1
-            vx = int(math.copysign(1, delta)) if abs(delta) >= 0.5 else vx
-            ny = paddle_row - 1
-        else:
-            # missed paddle -> lose life
-            st.session_state.lives -= 1
-            if st.session_state.lives > 0:
-                reset_ball()
-                st.warning("패들을 놓쳤어요! 남은 목숨: {}".format(st.session_state.lives))
-                return
-            else:
-                st.session_state.running_steps = 0
-                st.error("💀 게임 오버! 최종 점수: {}".format(st.session_state.score))
-                return
-
-    # floor detection (below paddle)
-    if ny >= GRID_H:
-        st.session_state.lives -= 1
-        if st.session_state.lives > 0:
-            reset_ball()
-            return
-        else:
-            st.session_state.running_steps = 0
-            st.error("💀 게임 오버! 최종 점수: {}".format(st.session_state.score))
-            return
-
-    st.session_state.ball_x = nx
-    st.session_state.ball_y = ny
-    st.session_state.vel_x = vx
-    st.session_state.vel_y = vy
-
-    # level up when bricks cleared
-    if not st.session_state.bricks:
-        st.session_state.level += 1
-        st.session_state.score += 100 * st.session_state.level
-        st.success(f"레벨 업! 레벨 {st.session_state.level} — 브릭 재배치")
-        # new brick formation: more rows (capped)
-        new_rows = min(BRICK_ROWS + st.session_state.level - 1, GRID_H // 3)
-        st.session_state.bricks = {(r, c) for r in range(new_rows) for c in range(GRID_W)}
-        reset_ball()
+def spawn_enemies(n):
+    st.session_state.enemies = []
+    ids = 0
+    for _ in range(n):
+        while True:
+            x = random.randint(0, GRID_W - 1)
+            y = random.randint(0, max(0, GRID_H // 2 - 1))  # spawn in upper half
+            # don't spawn on player
+            if not (x == st.session_state.player["x"] and y == st.session_state.player["y"]):
+                break
+        st.session_state.enemies.append({"id": ids, "x": x, "y": y, "hp": 1})
+        ids += 1
 
 
-# --- UI ---
-st.title("🧱 Streamlit 벽돌깨기 — 실사 느낌 모드 (턴/버튼 기반)")
-col_status, col_controls = st.columns([2, 3])
-with col_status:
-    st.markdown(f"**점수:** {st.session_state.score}  ")
-    st.markdown(f"**목숨:** {st.session_state.lives}  ")
-    st.markdown(f"**레벨:** {st.session_state.level}  ")
+def reset_game(enemy_count=None):
+    st.session_state.player = {"x": GRID_W // 2, "y": GRID_H - 1, "hp": PLAYER_MAX_HP}
+    st.session_state.bullets = []
+    st.session_state.score = 0
+    st.session_state.turn = 1
+    st.session_state.msg = "새로운 게임"
+    st.session_state.game_over = False
+    if enemy_count is not None:
+        st.session_state.enemy_count = enemy_count
+    spawn_enemies(st.session_state.enemy_count)
 
-with col_controls:
-    c1, c2, c3, c4 = st.columns([1,1,1,1])
-    if c1.button("⬅️ 왼쪽"):
-        st.session_state.paddle_x = max(0, st.session_state.paddle_x - 1)
-    if c3.button("➡️ 오른쪽"):
-        st.session_state.paddle_x = min(GRID_W - PADDLE_WIDTH, st.session_state.paddle_x + 1)
-    if c2.button("▶ 한 스텝"):
-        advance_step()
-    if c4.button("🔁 10스텝 자동진행"):
-        # advance multiple steps in one click for pseudo-animation
-        for _ in range(10):
-            advance_step()
 
-# speed control for how many steps to run when auto clicked
-steps = st.slider("자동 진행 스텝 수", 1, 50, 10)
-if st.button("🔁 자동 진행 (설정한 스텝 수만큼)"):
-    for _ in range(steps):
-        advance_step()
+# actions
 
-if st.button("⟲ 리스타트 (점수 유지 여부 선택)"):
-    # provide a mini-choice
-    if st.checkbox("점수 리셋", value=False):
-        st.session_state.score = 0
-    st.session_state.lives = 3
-    st.session_state.level = 1
-    st.session_state.bricks = {(r, c) for r in range(BRICK_ROWS) for c in range(GRID_W)}
-    reset_ball()
-    st.experimental_rerun()
+def move_player(dx, dy):
+    if st.session_state.game_over:
+        return
+    nx = max(0, min(GRID_W - 1, st.session_state.player["x"] + dx))
+    ny = max(0, min(GRID_H - 1, st.session_state.player["y"] + dy))
+    st.session_state.player["x"] = nx
+    st.session_state.player["y"] = ny
+    st.session_state.msg = f"플레이어 이동 -> ({nx}, {ny})"
 
-# --- render board as HTML grid for nicer visuals ---
 
-def render_board_html():
-    html = f"""
-    <div style='font-family:monospace;'>
-    <div style='display:inline-block; background:#111; padding:10px; border-radius:8px;'>
-    """
-    for r in range(GRID_H):
-        html += "<div style='display:flex; line-height:0;'>"
-        for c in range(GRID_W):
-            style = "width:%dpx; height:%dpx; margin:2px; border-radius:4px; display:inline-block;" % (CELL_SIZE, CELL_SIZE)
-            if (r, c) in st.session_state.bricks:
-                # color by row for variety
-                hue = int(200 - (r * 10)) % 360
-                style += f" background: linear-gradient(135deg, hsl({hue} 70% 50%), hsl({(hue+30)%360} 70% 40%)); box-shadow: 0 2px 4px rgba(0,0,0,0.4);"
-            elif r == st.session_state.ball_y and c == st.session_state.ball_x:
-                style += " background: radial-gradient(circle at 30% 30%, #ffffff, #b3e5ff 40%, #0095DD 60%); box-shadow: 0 0 6px rgba(0,0,0,0.6);"
-            elif r == GRID_H - 1 and st.session_state.paddle_x <= c < st.session_state.paddle_x + PADDLE_WIDTH:
-                style += " background: linear-gradient(90deg,#2b8cff,#0057b7); box-shadow: 0 2px 6px rgba(0,0,0,0.5);"
-            else:
-                style += " background: linear-gradient(180deg,#222,#111);"
+def fire(dx, dy):
+    if st.session_state.game_over:
+        return
+    # spawn bullet in front of player
+    bx = st.session_state.player["x"] + dx
+    by = st.session_state.player["y"] + dy
+    if 0 <= bx < GRID_W and 0 <= by < GRID_H:
+        st.session_state.bullets.append({"x": bx, "y": by, "dx": dx, "dy": dy, "owner": "player"})
+        st.session_state.msg = f"발사! 방향 ({dx},{dy})"
+
+
+def enemy_fire(enemy):
+    # enemy fires towards player (normalized step)
+    ex, ey = enemy["x"], enemy["y"]
+    px, py = st.session_state.player["x"], st.session_state.player["y"]
+    dx = px - ex
+    dy = py - ey
+    if dx == 0 and dy == 0:
+        return
+    # normalize to -1,0,1
+    sdx = int(math.copysign(1, dx)) if dx != 0 else 0
+    sdy = int(math.copysign(1, dy)) if dy != 0 else 0
+    bx = ex + sdx
+    by = ey + sdy
+    if 0 <= bx < GRID_W and 0 <= by < GRID_H:
+        st.session_state.bullets.append({"x": bx, "y": by, "dx": sdx, "dy": sdy, "owner": "enemy"})
+
+
+def advance_bullets():
+    new_bullets = []
+    for b in st.session_state.bullets:
+        nx = b["x"] + b["dx"]
+        ny = b["y"] + b["dy"]
+        # check bounds
+        if not (0 <= nx < GRID_W and 0 <= ny < GRID_H):
+            continue
+        # collision with enemies (player bullets)
+        if b["owner"] == "player":
+            hit_enemy = None
+            for e in st.session_state.enemies:
+                if e["x"] == nx and e["y"] == ny:
+                    hit_enemy = e
+                    break
+            if hit_enemy:
+                st.session_state.score += 10
+                try:
+                    st.session_state.enemies.remove(hit_enemy)
+                except ValueError:
+                    pass
+                st.session_state.msg = f"적 격파! 점수 +10 (총 {st.session_state.score})"
+                continue
+        # collision with player (enemy bullets)
+        if b["owner"] == "enemy":
+            if st.session_state.player["x"] == nx and st.session_state.player["y"] == ny:
+                st.session_state.player["hp"] -= 1
+                st.session_state.msg = f"플레이어가 피격당함! HP -1 (남은 HP: {st.session_state.player['hp']})"
+                if st.session_state.player["hp"] <= 0:
+                    st.session_state.game_over = True
+                    st.session_state.msg = "플레이어 사망 — 게임 오버"
+                continue
+        # otherwise bullet continues
+        new_bullets.append({"x": nx, "y": ny, "dx": b["dx"], "dy": b["dy"], "owner": b["owner"]})
+    st.session_state.bullets = new_bullets
+
+
+def enemies_act():
+    # each enemy randomly moves one step (or stays), and has chance to fire
+    for e in st.session_state.enemies[:]:
+        if random.random() < 0.6:
+            # move towards player with some randomness
+            dx = st.session_state.player["x"] - e["x"]
+            dy = st.session_state.player["y"] - e["y"]
+            step_x = int(math.copysign(1, dx)) if dx != 0 and random.random() < 0.7 else (random.choice([-1,0,1]) if random.random()<0.3 else 0)
+            step_y = int(math.copysign(1, dy)) if dy != 0 and random.random() < 0.7 else (random.choice([-1,0,1]) if random.random()<0.3 else 0)
+            nx = max(0, min(GRID_W - 1, e["x"] + step_x))
+            ny = max(0, min(GRID_H - 1, e["y"] + step_y))
+            # don't move onto another enemy
+            if not any(other["x"] == nx and other["y"] == ny for other in st.session_state.enemies if other is not e):
+                e["x"] = nx
+                e["y"] = ny
+        # chance to fire
+        if random.random() < 0.4:
+            enemy_fire(e)
+        # if enemy moves into player
+        if e["x"] == st.session_state.player["x"] and e["y"] == st.session_state.player["y"]:
+            st.session_state.player["hp"] -= 1
+            st.session_state.msg = f"적과 충돌! HP -1 (남은 HP: {st.session_state.player['hp']})"
+            if st.session_state.player["hp"] <= 0:
+                st.session_state.game_over = True
+                st.session_state.msg = "플레이어 사망 — 게임 오버"
+
+
+# game step
+
+def next_turn():
+    if st.session_state.game_over:
+        return
+    st.session_state.turn += 1
+    # advance bullets first (player fired this turn)
+    advance_bullets()
+    # enemies act (move + shoot)
+    enemies_act()
+    # bullets from enemies move
+    advance_bullets()
+    # spawn simple enemy reinforcements occasionally
+    if st.session_state.turn % 10 == 0 and len(st.session_state.enemies) < GRID_W:
+        # spawn one enemy at top row
+        nx = random.randint(0, GRID_W - 1)
+        st.session_state.enemies.append({"id": max([e["id"] for e in st.session_state.enemies], default=0) + 1, "x": nx, "y": 0, "hp": 1})
+        st.session_state.msg = "보강 병력 도착!"
+    # win condition
+    if not st.session_state.enemies:
+        st.session_state.msg = f"모든 적 제거! 스테이지 클리어 — 점수 {st.session_state.score}"
+        st.session_state.game_over = True
+
+
+# UI helpers
+
+def render_grid_html():
+    CELL = 36
+    html = "<div style='font-family:Arial, monospace;'>"
+    html += "<div style='display:inline-block; padding:8px; background:#111; border-radius:8px;'>"
+    for y in range(GRID_H):
+        html += "<div style='display:flex;'>"
+        for x in range(GRID_W):
+            style = f"width:{CELL}px; height:{CELL}px; margin:3px; border-radius:6px; display:inline-block;" + "background:linear-gradient(180deg,#222,#111); box-shadow:inset 0 1px 0 rgba(255,255,255,0.02);"
+            char = ""
+            # bullets
+            is_bullet = any(b["x"] == x and b["y"] == y for b in st.session_state.bullets)
+            if is_bullet:
+                style += " background: radial-gradient(circle at 30% 30%, #fff, #ffea00 30%, #ff6f00 60%); box-shadow:0 0 6px rgba(255,140,0,0.6);"
+            # player
+            elif st.session_state.player["x"] == x and st.session_state.player["y"] == y:
+                style += " background: linear-gradient(180deg,#3ec6ff,#006fb3); box-shadow:0 2px 6px rgba(0,0,0,0.5);"
+            # enemy
+            elif any(e["x"] == x and e["y"] == y for e in st.session_state.enemies):
+                style += " background: linear-gradient(180deg,#ff6b6b,#b30000); box-shadow:0 2px 6px rgba(0,0,0,0.5);"
             html += f"<div style='{style}'></div>"
         html += "</div>"
     html += "</div></div>"
     return html
 
-board_html = render_board_html()
-components.html(board_html, height=(CELL_SIZE+6) * GRID_H + 40)
 
-# --- helpful tips ---
-st.markdown("**팁:** 방향 버튼으로 패들을 옮기고 '한 스텝' 또는 '자동 진행'을 눌러 플레이하세요.\n\n한 번에 여러 스텝을 진행하면 실제 게임처럼 빠른 진행을 흉내낼 수 있습니다.")
+# Header
+st.title("🎯 Streamlit 턴 기반 슈팅 게임")
+col1, col2 = st.columns([2, 3])
+with col1:
+    st.markdown(f"**턴:** {st.session_state.turn}  ")
+    st.markdown(f"**점수:** {st.session_state.score}  ")
+    st.markdown(f"**플레이어 HP:** {st.session_state.player['hp']} / {PLAYER_MAX_HP}  ")
+    st.markdown(f"**적 수:** {len(st.session_state.enemies)}  ")
+    st.markdown(f"**메시지:** {st.session_state.msg}  ")
 
-# --- footer ---
-st.caption("Streamlit만 사용한 턴 기반 벽돌깨기 — 추가 기능 원하면 말해줘 (사운드, 레벨별 브릭 패턴, 랭킹 등)")
+with col2:
+    # controls: move
+    mv1, mv2, mv3 = st.columns([1,1,1])
+    with mv2:
+        if st.button("⬆️ 이동"):
+            move_player(0, -1)
+            next_turn()
+    row = st.columns([1,1,1])
+    with row[0]:
+        if st.button("⬅️ 이동"):
+            move_player(-1, 0)
+            next_turn()
+    with row[1]:
+        if st.button("⏭ 다음 턴(무동작)"):
+            next_turn()
+    with row[2]:
+        if st.button("➡️ 이동"):
+            move_player(1, 0)
+            next_turn()
+    with mv3:
+        if st.button("⬇️ 이동"):
+            move_player(0, 1)
+            next_turn()
+
+    st.markdown("---")
+    # fire controls (4 directions)
+    f1, f2, f3, f4 = st.columns([1,1,1,1])
+    with f2:
+        if st.button("🔼 발사"):
+            fire(0, -1)
+            next_turn()
+    with f1:
+        if st.button("◀️ 발사"):
+            fire(-1, 0)
+            next_turn()
+    with f3:
+        if st.button("▶️ 발사"):
+            fire(1, 0)
+            next_turn()
+    with f4:
+        if st.button("🔽 발사"):
+            fire(0, 1)
+            next_turn()
+
+# right-side controls
+st.sidebar.title("게임 설정 & 조작")
+if st.sidebar.button("리셋"): 
+    reset_game()
+
+enemy_slider = st.sidebar.slider("초기 적 수", 1, 12, st.session_state.enemy_count)
+if enemy_slider != st.session_state.enemy_count:
+    st.sidebar.button("적 재배치 (적 수 적용)", key="apply_enemy")
+    st.session_state.enemy_count = enemy_slider
+
+if st.sidebar.button("새 게임 (설정 반영)"):
+    reset_game(enemy_count=st.session_state.enemy_count)
+
+if st.sidebar.button("자동 5턴 진행"):
+    for _ in range(5):
+        next_turn()
+
+st.sidebar.markdown("---")
+st.sidebar.markdown("**설명**: 이동 또는 발사 버튼을 눌러 행동하세요. 행동 후 '다음 턴'이 자동으로 진행됩니다. 적은 이동하거나 발사로 대응합니다.")
+
+# render grid
+board_html = render_grid_html()
+components.html(board_html, height=460)
+
+# end conditions
+if st.session_state.game_over:
+    st.warning("게임이 종료되었습니다. 사이드바의 '새 게임' 버튼으로 다시 시작하세요.")
+
+# small tips
+st.caption("팁: '자동 5턴 진행' 버튼으로 빠르게 턴을 감아볼 수 있어요. 추가 기능(무기 업그레이드, 아이템, 보스전)을 원하면 말해줘요!")
