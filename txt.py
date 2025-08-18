@@ -124,7 +124,6 @@ def color_balance(img, r_shift=0, g_shift=0, b_shift=0):
     return img
 
 def simple_color_temp(img, temp=0):
-    # temp > 0 : 더 따뜻하게, temp < 0 : 더 차갑게
     img = img.convert("RGB")
     pixels = img.load()
     width, height = img.size
@@ -173,8 +172,7 @@ if uploaded_file:
 
     # 필터 적용
     if filter_option == "흑백":
-        filtered = ImageOps.grayscale(filtered)
-        filtered = filtered.convert("RGB")
+        filtered = ImageOps.grayscale(filtered).convert("RGB")
     elif filter_option == "세피아":
         filtered = apply_sepia(filtered)
     elif filter_option == "블러":
@@ -208,7 +206,8 @@ if uploaded_file:
     elif filter_option == "모션 블러(흉내)":
         filtered = filtered.filter(ImageFilter.GaussianBlur(radius=2))
 
-    # 보정 적용
+    # 보정 적용 (RGB 변환 후 안전하게 적용)
+    filtered = filtered.convert("RGB")
     filtered = ImageEnhance.Sharpness(filtered).enhance(sharpness_val)
     filtered = ImageEnhance.Brightness(filtered).enhance(brightness_val)
     filtered = ImageEnhance.Contrast(filtered).enhance(contrast_val)
@@ -217,7 +216,7 @@ if uploaded_file:
         filtered = shift_hue(filtered, hue_val)
     filtered = gamma_correction(filtered, gamma_val)
     if invert_colors:
-        filtered = ImageOps.invert(filtered.convert("RGB"))
+        filtered = ImageOps.invert(filtered)
     if noise_amount > 0.0:
         filtered = add_noise(filtered, noise_amount)
     if color_temp_val != 0:
@@ -248,92 +247,3 @@ if uploaded_file:
     )
 else:
     st.info("📌 왼쪽에서 이미지를 업로드 해주세요!")
-
-# ------------------------- 추가 유틸 함수 -------------------------
-
-def simple_color_temp(img, temp=0):
-    # temp >0: 따뜻하게, <0: 차갑게
-    img = img.convert("RGB")
-    pixels = img.load()
-    width, height = img.size
-    for x in range(width):
-        for y in range(height):
-            r, g, b = pixels[x, y]
-            r = int(r + temp*20)
-            b = int(b - temp*20)
-            r = max(0, min(255, r))
-            b = max(0, min(255, b))
-            pixels[x, y] = (r, g, b)
-    return img
-
-def color_balance(img, r_shift=0, g_shift=0, b_shift=0):
-    img = img.convert("RGB")
-    pixels = img.load()
-    width, height = img.size
-    for x in range(width):
-        for y in range(height):
-            r, g, b = pixels[x, y]
-            r = max(0, min(255, r + r_shift))
-            g = max(0, min(255, g + g_shift))
-            b = max(0, min(255, b + b_shift))
-            pixels[x, y] = (r, g, b)
-    return img
-
-def apply_sepia(img):
-    img = img.convert("RGB")
-    width, height = img.size
-    pixels = img.load()
-    for py in range(height):
-        for px in range(width):
-            r, g, b = img.getpixel((px, py))
-            tr = int(0.393*r + 0.769*g + 0.189*b)
-            tg = int(0.349*r + 0.686*g + 0.168*b)
-            tb = int(0.272*r + 0.534*g + 0.131*b)
-            pixels[px, py] = (min(255,tr), min(255,tg), min(255,tb))
-    return img
-
-def shift_hue(img, hue_shift):
-    img = img.convert('RGB')
-    pixels = img.load()
-    width, height = img.size
-    for x in range(width):
-        for y in range(height):
-            r, g, b = img.getpixel((x, y))
-            h, s, v = colorsys.rgb_to_hsv(r/255., g/255., b/255.)
-            h = (h + hue_shift) % 1.0
-            r, g, b = colorsys.hsv_to_rgb(h, s, v)
-            pixels[x, y] = (int(r*255), int(g*255), int(b*255))
-    return img
-
-def add_noise(img, amount=0.05):
-    img = img.convert("RGB")
-    pixels = img.load()
-    width, height = img.size
-    for x in range(width):
-        for y in range(height):
-            r, g, b = pixels[x, y]
-            nr = int(r + random.randint(-int(255*amount), int(255*amount)))
-            ng = int(g + random.randint(-int(255*amount), int(255*amount)))
-            nb = int(b + random.randint(-int(255*amount), int(255*amount)))
-            pixels[x, y] = (max(0, min(255, nr)), max(0, min(255, ng)), max(0, min(255, nb)))
-    return img
-
-def gamma_correction(img, gamma=1.0):
-    inv_gamma = 1.0 / gamma
-    img = img.convert("RGB")
-    pixels = img.load()
-    width, height = img.size
-    for x in range(width):
-        for y in range(height):
-            r, g, b = pixels[x, y]
-            r = int((r / 255.0) ** inv_gamma * 255)
-            g = int((g / 255.0) ** inv_gamma * 255)
-            b = int((b / 255.0) ** inv_gamma * 255)
-            pixels[x, y] = (r, g, b)
-    return img
-
-def posterize(img, bits=4):
-    return ImageOps.posterize(img, bits)
-
-def solarize(img, threshold=128):
-    return ImageOps.solarize(img, threshold)
