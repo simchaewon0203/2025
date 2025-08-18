@@ -1,241 +1,339 @@
-import io
-import time
-from datetime import datetime
-
-import torch
-from torch import nn, optim
-import torch.nn.functional as F
-from torchvision.models import vgg19, VGG19_Weights
-import torchvision.transforms as T
-from PIL import Image
-
 import streamlit as st
+from PIL import Image, ImageFilter, ImageOps, ImageEnhance, ImageChops
+import io
+import colorsys
+import random
 
-st.set_page_config(page_title="AI Style Transfer", page_icon="🎨", layout="wide")
+st.set_page_config(page_title="🎀 핑크톤 이미지 편집기 20+ 필터", layout="centered")
 
-# =============================
-# 유틸리티 함수
-# =============================
+# --- 핑크톤 스타일 ---
+st.markdown("""
+<style>
+    .main {
+        background: #fff0f6;
+        color: #880e4f;
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    }
+    .stButton>button {
+        background-color: #f48fb1;
+        color: white;
+        font-weight: bold;
+        border-radius: 8px;
+        height: 40px;
+        width: 100%;
+        margin-top: 5px;
+        transition: background-color 0.3s ease;
+    }
+    .stButton>button:hover {
+        background-color: #ec407a;
+        color: white;
+    }
+    .stSlider > div > div > input[type=range] {
+        accent-color: #f48fb1;
+    }
+    .stSelectbox>div>div>div>select {
+        color: #880e4f;
+        font-weight: 600;
+    }
+    .css-1aumxhk {
+        color: #880e4f;
+        font-weight: 700;
+    }
+    .css-1offfwp {
+        color: #880e4f;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-def pil_to_tensor(img: Image.Image, max_size: int = 512) -> torch.Tensor:
-    if img.mode != "RGB":
-        img = img.convert("RGB")
-    w, h = img.size
-    scale = min(1.0, max_size / max(w, h))
-    if scale < 1.0:
-        img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
-    transform = T.ToTensor()
-    return transform(img).unsqueeze(0)  # 배치 차원 추가
+st.title("🎀 핑크톤 이미지 편집기 20+ 필터 & 보정 💖")
 
+uploaded_file = st.file_uploader("📤 이미지를 업로드하세요 (PNG, JPG, JPEG)", type=["png", "jpg", "jpeg"])
 
-def tensor_to_pil(t: torch.Tensor) -> Image.Image:
-    t = t.detach().cpu().clamp(0, 1)
-    return T.ToPILImage()(t.squeeze(0))
+# ---------------------------- 유틸 함수들 -----------------------------
 
+def apply_sepia(img):
+    img = img.convert("RGB")
+    width, height = img.size
+    pixels = img.load()
+    for py in range(height):
+        for px in range(width):
+            r, g, b = img.getpixel((px, py))
+            tr = int(0.393*r + 0.769*g + 0.189*b)
+            tg = int(0.349*r + 0.686*g + 0.168*b)
+            tb = int(0.272*r + 0.534*g + 0.131*b)
+            pixels[px, py] = (min(255,tr), min(255,tg), min(255,tb))
+    return img
 
-class Normalization(nn.Module):
-    def __init__(self, mean, std):
-        super().__init__()
-        self.mean = torch.tensor(mean).view(-1,1,1)
-        self.std = torch.tensor(std).view(-1,1,1)
-    def forward(self, img):
-        return (img - self.mean) / self.std
+def shift_hue(img, hue_shift):
+    img = img.convert('RGB')
+    pixels = img.load()
+    width, height = img.size
+    for x in range(width):
+        for y in range(height):
+            r, g, b = img.getpixel((x, y))
+            h, s, v = colorsys.rgb_to_hsv(r/255., g/255., b/255.)
+            h = (h + hue_shift) % 1.0
+            r, g, b = colorsys.hsv_to_rgb(h, s, v)
+            pixels[x, y] = (int(r*255), int(g*255), int(b*255))
+    return img
 
+def add_noise(img, amount=0.05):
+    img = img.convert("RGB")
+    pixels = img.load()
+    width, height = img.size
+    for x in range(width):
+        for y in range(height):
+            r, g, b = pixels[x, y]
+            nr = int(r + random.randint(-int(255*amount), int(255*amount)))
+            ng = int(g + random.randint(-int(255*amount), int(255*amount)))
+            nb = int(b + random.randint(-int(255*amount), int(255*amount)))
+            pixels[x, y] = (max(0, min(255, nr)), max(0, min(255, ng)), max(0, min(255, nb)))
+    return img
 
-def gram_matrix(x: torch.Tensor) -> torch.Tensor:
-    b, c, h, w = x.size()
-    features = x.view(b * c, h * w)
-    G = torch.mm(features, features.t())
-    return G.div(b * c * h * w)
+def gamma_correction(img, gamma=1.0):
+    inv_gamma = 1.0 / gamma
+    img = img.convert("RGB")
+    pixels = img.load()
+    width, height = img.size
+    for x in range(width):
+        for y in range(height):
+            r, g, b = pixels[x, y]
+            r = int((r / 255.0) ** inv_gamma * 255)
+            g = int((g / 255.0) ** inv_gamma * 255)
+            b = int((b / 255.0) ** inv_gamma * 255)
+            pixels[x, y] = (r, g, b)
+    return img
 
+def posterize(img, bits=4):
+    return ImageOps.posterize(img, bits)
 
-class ContentLoss(nn.Module):
-    def __init__(self, target: torch.Tensor, weight: float = 1.0):
-        super().__init__()
-        self.target = target.detach()
-        self.weight = weight
-        self.loss = torch.tensor(0.0)
-    def forward(self, x):
-        self.loss = self.weight * F.mse_loss(x, self.target)
-        return x
+def solarize(img, threshold=128):
+    return ImageOps.solarize(img, threshold)
 
+def color_balance(img, r_shift=0, g_shift=0, b_shift=0):
+    img = img.convert("RGB")
+    pixels = img.load()
+    width, height = img.size
+    for x in range(width):
+        for y in range(height):
+            r, g, b = pixels[x, y]
+            r = max(0, min(255, r + r_shift))
+            g = max(0, min(255, g + g_shift))
+            b = max(0, min(255, b + b_shift))
+            pixels[x, y] = (r, g, b)
+    return img
 
-class StyleLoss(nn.Module):
-    def __init__(self, target_feature: torch.Tensor, weight: float = 1.0):
-        super().__init__()
-        self.target = gram_matrix(target_feature).detach()
-        self.weight = weight
-        self.loss = torch.tensor(0.0)
-    def forward(self, x):
-        G = gram_matrix(x)
-        self.loss = self.weight * F.mse_loss(G, self.target)
-        return x
+def simple_color_temp(img, temp=0):
+    # temp > 0 : 더 따뜻하게, temp < 0 : 더 차갑게
+    img = img.convert("RGB")
+    pixels = img.load()
+    width, height = img.size
+    for x in range(width):
+        for y in range(height):
+            r, g, b = pixels[x, y]
+            r = int(r + temp*20)
+            b = int(b - temp*20)
+            r = max(0, min(255, r))
+            b = max(0, min(255, b))
+            pixels[x, y] = (r, g, b)
+    return img
 
+# ---------------------------- 메인 -----------------------------
 
-def build_style_transfer_model(cnn: nn.Module,
-                               normalization_mean,
-                               normalization_std,
-                               style_img: torch.Tensor,
-                               content_img: torch.Tensor,
-                               style_layers=None,
-                               content_layers=None,
-                               style_weight: float = 1e6,
-                               content_weight: float = 1.0,
-                               device: str = "cpu"):
-    if style_layers is None:
-        style_layers = ["conv1_1", "conv2_1", "conv3_1", "conv4_1", "conv5_1"]
-    if content_layers is None:
-        content_layers = ["conv4_2"]
+if uploaded_file:
+    image = Image.open(uploaded_file)
+    st.image(image, caption="✨ 원본 이미지", use_column_width=True)
 
-    normalization = Normalization(normalization_mean, normalization_std).to(device)
-    content_losses = []
-    style_losses = []
-    model = nn.Sequential(normalization)
+    filter_option = st.selectbox("🎨 필터 선택", [
+        "없음", "흑백", "세피아", "블러", "엠보스", "엣지 강화", "샤픈", "컨투어", "스무딩",
+        "윤곽선 (Find Edges)", "디테일", "포스터화 (Posterize)", "색상 반전", "솔라라이즈 (Solarize)",
+        "노이즈", "엠베스(엠보스+블러)", "윤곽+블러", "모션 블러(흉내)"
+    ])
 
-    i = 0
-    for layer in cnn.features.children():
-        if isinstance(layer, nn.Conv2d):
-            i += 1
-            name = f"conv{i}_1"
-        elif isinstance(layer, nn.ReLU):
-            name = f"relu{i}"
-            layer = nn.ReLU(inplace=False)
-        elif isinstance(layer, nn.MaxPool2d):
-            name = f"pool{i}"
-        elif isinstance(layer, nn.BatchNorm2d):
-            name = f"bn{i}"
-        else:
-            name = f"layer_{len(model)}"
-        model.add_module(name, layer)
+    st.markdown("### 🎛️ 보정 기능")
+    sharpness_val = st.slider("🔍 선명도", 0.0, 3.0, 1.0, 0.1)
+    brightness_val = st.slider("💡 밝기", 0.0, 3.0, 1.0, 0.1)
+    contrast_val = st.slider("⚖️ 대비", 0.0, 3.0, 1.0, 0.1)
+    saturation_val = st.slider("🌈 채도", 0.0, 3.0, 1.0, 0.1)
+    hue_val = st.slider("🎨 색조 (Hue Shift)", -0.5, 0.5, 0.0, 0.01)
+    gamma_val = st.slider("🔆 감마 보정", 0.1, 3.0, 1.0, 0.05)
+    invert_colors = st.checkbox("🌚 색상 반전")
+    noise_amount = st.slider("✨ 노이즈 양", 0.0, 0.2, 0.0, 0.01)
+    color_temp_val = st.slider("🔥 색온도 (-5 차갑게 ~ 5 따뜻하게)", -5, 5, 0, 1)
+    r_shift = st.slider("🔴 R 색상 이동", -100, 100, 0, 1)
+    g_shift = st.slider("🟢 G 색상 이동", -100, 100, 0, 1)
+    b_shift = st.slider("🔵 B 색상 이동", -100, 100, 0, 1)
 
-        if name in content_layers:
-            target = model(content_img).detach()
-            content_loss = ContentLoss(target, content_weight)
-            model.add_module(f"content_loss_{i}", content_loss)
-            content_losses.append(content_loss)
+    st.markdown("### 🔄 변환 기능")
+    rotate_angle = st.selectbox("↪️ 회전", [0, 90, 180, 270])
+    flip_horizontal = st.checkbox("↔️ 좌우 반전")
+    flip_vertical = st.checkbox("↕️ 상하 반전")
 
-        if name in style_layers:
-            target_feature = model(style_img).detach()
-            style_loss = StyleLoss(target_feature, style_weight)
-            model.add_module(f"style_loss_{i}", style_loss)
-            style_losses.append(style_loss)
+    filtered = image.copy()
 
-    for idx in range(len(model)-1, -1, -1):
-        if isinstance(model[idx], (ContentLoss, StyleLoss)):
-            model = model[:idx+1]
-            break
+    # 필터 적용
+    if filter_option == "흑백":
+        filtered = ImageOps.grayscale(filtered)
+        filtered = filtered.convert("RGB")
+    elif filter_option == "세피아":
+        filtered = apply_sepia(filtered)
+    elif filter_option == "블러":
+        filtered = filtered.filter(ImageFilter.BLUR)
+    elif filter_option == "엠보스":
+        filtered = filtered.filter(ImageFilter.EMBOSS)
+    elif filter_option == "엣지 강화":
+        filtered = filtered.filter(ImageFilter.EDGE_ENHANCE)
+    elif filter_option == "샤픈":
+        filtered = filtered.filter(ImageFilter.SHARPEN)
+    elif filter_option == "컨투어":
+        filtered = filtered.filter(ImageFilter.CONTOUR)
+    elif filter_option == "스무딩":
+        filtered = filtered.filter(ImageFilter.SMOOTH)
+    elif filter_option == "윤곽선 (Find Edges)":
+        filtered = filtered.filter(ImageFilter.FIND_EDGES)
+    elif filter_option == "디테일":
+        filtered = filtered.filter(ImageFilter.DETAIL)
+    elif filter_option == "포스터화 (Posterize)":
+        filtered = posterize(filtered, bits=4)
+    elif filter_option == "색상 반전":
+        filtered = ImageOps.invert(filtered.convert("RGB"))
+    elif filter_option == "솔라라이즈 (Solarize)":
+        filtered = solarize(filtered, threshold=128)
+    elif filter_option == "노이즈":
+        filtered = add_noise(filtered, amount=0.1)
+    elif filter_option == "엠베스(엠보스+블러)":
+        filtered = filtered.filter(ImageFilter.EMBOSS).filter(ImageFilter.BLUR)
+    elif filter_option == "윤곽+블러":
+        filtered = filtered.filter(ImageFilter.FIND_EDGES).filter(ImageFilter.BLUR)
+    elif filter_option == "모션 블러(흉내)":
+        filtered = filtered.filter(ImageFilter.GaussianBlur(radius=2))
 
-    return model, style_losses, content_losses
+    # 보정 적용
+    filtered = ImageEnhance.Sharpness(filtered).enhance(sharpness_val)
+    filtered = ImageEnhance.Brightness(filtered).enhance(brightness_val)
+    filtered = ImageEnhance.Contrast(filtered).enhance(contrast_val)
+    filtered = ImageEnhance.Color(filtered).enhance(saturation_val)
+    if hue_val != 0.0:
+        filtered = shift_hue(filtered, hue_val)
+    filtered = gamma_correction(filtered, gamma_val)
+    if invert_colors:
+        filtered = ImageOps.invert(filtered.convert("RGB"))
+    if noise_amount > 0.0:
+        filtered = add_noise(filtered, noise_amount)
+    if color_temp_val != 0:
+        filtered = simple_color_temp(filtered, color_temp_val)
+    if any([r_shift, g_shift, b_shift]):
+        filtered = color_balance(filtered, r_shift, g_shift, b_shift)
 
+    # 변환 적용
+    if rotate_angle != 0:
+        filtered = filtered.rotate(rotate_angle, expand=True)
+    if flip_horizontal:
+        filtered = ImageOps.mirror(filtered)
+    if flip_vertical:
+        filtered = ImageOps.flip(filtered)
 
-def run_style_transfer(content_img: Image.Image,
-                       style_img: Image.Image,
-                       max_size: int = 512,
-                       num_steps: int = 300,
-                       style_weight: float = 1e6,
-                       content_weight: float = 1.0,
-                       lr: float = 0.03,
-                       device: str = "cpu") -> Image.Image:
-    device = torch.device(device)
-    content_t = pil_to_tensor(content_img, max_size).to(device)
-    style_t = pil_to_tensor(style_img, max_size).to(device)
-    input_img = content_t.clone().requires_grad_(True)
+    st.image(filtered, caption="💖 적용된 이미지", use_column_width=True)
 
-    weights = VGG19_Weights.DEFAULT
-    cnn = vgg19(weights=weights).to(device).eval()
-    norm_mean = weights.meta["mean"]
-    norm_std = weights.meta["std"]
+    # 다운로드
+    buf = io.BytesIO()
+    filtered.save(buf, format="PNG")
+    byte_im = buf.getvalue()
 
-    model, style_losses, content_losses = build_style_transfer_model(
-        cnn, norm_mean, norm_std, style_t, content_t,
-        style_weight=style_weight, content_weight=content_weight, device=str(device)
+    st.download_button(
+        label="📥 이미지 다운로드",
+        data=byte_im,
+        file_name="pink_edited_image.png",
+        mime="image/png"
     )
+else:
+    st.info("📌 왼쪽에서 이미지를 업로드 해주세요!")
 
-    optimizer = optim.Adam([input_img], lr=lr)
-    pbar = st.progress(0, text="스타일 변환 진행 중…")
-    status = st.empty()
+# ------------------------- 추가 유틸 함수 -------------------------
 
-    for step in range(1, num_steps+1):
-        optimizer.zero_grad()
-        model(input_img)
-        style_score = sum(sl.loss for sl in style_losses)
-        content_score = sum(cl.loss for cl in content_losses)
-        loss = style_score + content_score
-        loss.backward()
-        optimizer.step()
+def simple_color_temp(img, temp=0):
+    # temp >0: 따뜻하게, <0: 차갑게
+    img = img.convert("RGB")
+    pixels = img.load()
+    width, height = img.size
+    for x in range(width):
+        for y in range(height):
+            r, g, b = pixels[x, y]
+            r = int(r + temp*20)
+            b = int(b - temp*20)
+            r = max(0, min(255, r))
+            b = max(0, min(255, b))
+            pixels[x, y] = (r, g, b)
+    return img
 
-        if step % max(1, num_steps//100) == 0:
-            pbar.progress(step/num_steps, text=f"Step {step}/{num_steps} | Style: {style_score.item():.2f} | Content: {content_score.item():.2f}")
-            status.text(f"Style Loss: {style_score.item():.2f} | Content Loss: {content_score.item():.2f}")
+def color_balance(img, r_shift=0, g_shift=0, b_shift=0):
+    img = img.convert("RGB")
+    pixels = img.load()
+    width, height = img.size
+    for x in range(width):
+        for y in range(height):
+            r, g, b = pixels[x, y]
+            r = max(0, min(255, r + r_shift))
+            g = max(0, min(255, g + g_shift))
+            b = max(0, min(255, b + b_shift))
+            pixels[x, y] = (r, g, b)
+    return img
 
-    result = tensor_to_pil(input_img)
-    pbar.empty()
-    status.empty()
-    return result
+def apply_sepia(img):
+    img = img.convert("RGB")
+    width, height = img.size
+    pixels = img.load()
+    for py in range(height):
+        for px in range(width):
+            r, g, b = img.getpixel((px, py))
+            tr = int(0.393*r + 0.769*g + 0.189*b)
+            tg = int(0.349*r + 0.686*g + 0.168*b)
+            tb = int(0.272*r + 0.534*g + 0.131*b)
+            pixels[px, py] = (min(255,tr), min(255,tg), min(255,tb))
+    return img
 
+def shift_hue(img, hue_shift):
+    img = img.convert('RGB')
+    pixels = img.load()
+    width, height = img.size
+    for x in range(width):
+        for y in range(height):
+            r, g, b = img.getpixel((x, y))
+            h, s, v = colorsys.rgb_to_hsv(r/255., g/255., b/255.)
+            h = (h + hue_shift) % 1.0
+            r, g, b = colorsys.hsv_to_rgb(h, s, v)
+            pixels[x, y] = (int(r*255), int(g*255), int(b*255))
+    return img
 
-# =============================
-# Streamlit UI
-# =============================
+def add_noise(img, amount=0.05):
+    img = img.convert("RGB")
+    pixels = img.load()
+    width, height = img.size
+    for x in range(width):
+        for y in range(height):
+            r, g, b = pixels[x, y]
+            nr = int(r + random.randint(-int(255*amount), int(255*amount)))
+            ng = int(g + random.randint(-int(255*amount), int(255*amount)))
+            nb = int(b + random.randint(-int(255*amount), int(255*amount)))
+            pixels[x, y] = (max(0, min(255, nr)), max(0, min(255, ng)), max(0, min(255, nb)))
+    return img
 
-st.title("🎨 AI Style Transfer")
-st.caption("컨텐츠 이미지에 스타일 이미지를 입혀 새로운 이미지를 생성합니다.")
+def gamma_correction(img, gamma=1.0):
+    inv_gamma = 1.0 / gamma
+    img = img.convert("RGB")
+    pixels = img.load()
+    width, height = img.size
+    for x in range(width):
+        for y in range(height):
+            r, g, b = pixels[x, y]
+            r = int((r / 255.0) ** inv_gamma * 255)
+            g = int((g / 255.0) ** inv_gamma * 255)
+            b = int((b / 255.0) ** inv_gamma * 255)
+            pixels[x, y] = (r, g, b)
+    return img
 
-with st.sidebar:
-    st.header("① 이미지 업로드")
-    content_file = st.file_uploader("컨텐츠 이미지", type=["jpg","jpeg","png"])
-    style_file = st.file_uploader("스타일 이미지", type=["jpg","jpeg","png"])
+def posterize(img, bits=4):
+    return ImageOps.posterize(img, bits)
 
-    st.header("② 파라미터")
-    max_size = st.slider("최대 해상도", 256, 1024, 512, step=32)
-    num_steps = st.slider("반복 횟수", 50, 800, 300, step=50)
-    style_weight = st.number_input("Style Weight", value=1e6, min_value=1e3, max_value=1e8, step=1e5, format="%.0f")
-    content_weight = st.number_input("Content Weight", value=1.0, min_value=0.0001, max_value=10.0, step=0.1, format="%.4f")
-    lr = st.number_input("Learning Rate", value=0.03, min_value=0.001, max_value=0.5, step=0.01, format="%.3f")
-    device_opt = "cuda" if torch.cuda.is_available() else "cpu"
-    device = st.selectbox("장치", [device_opt, "cpu", "cuda"], index=0 if device_opt=="cuda" else 1)
-
-col1, col2 = st.columns(2)
-with col1:
-    st.subheader("컨텐츠 이미지")
-    if content_file:
-        content_img = Image.open(content_file)
-        st.image(content_img, use_column_width=True)
-    else:
-        content_img = None
-        st.info("사진을 업로드 해주세요")
-
-with col2:
-    st.subheader("스타일 이미지")
-    if style_file:
-        style_img = Image.open(style_file)
-        st.image(style_img, use_column_width=True)
-    else:
-        style_img = None
-        st.info("스타일 이미지를 업로드 해주세요")
-
-st.divider()
-
-if st.button("✨ 스타일 변환 실행", type="primary"):
-    if content_img is None or style_img is None:
-        st.warning("두 이미지를 모두 업로드해주세요")
-        st.stop()
-    start = time.time()
-    result = run_style_transfer(content_img, style_img, max_size, num_steps, style_weight, content_weight, lr, device)
-    elapsed = time.time() - start
-    st.success(f"완료! 경과 시간: {elapsed:.1f}초")
-    st.image(result, use_column_width=True)
-
-    buf_png = io.BytesIO()
-    result.save(buf_png, format="PNG")
-    buf_png.seek(0)
-
-    buf_jpg = io.BytesIO()
-    result.convert("RGB").save(buf_jpg, format="JPEG", quality=95)
-    buf_jpg.seek(0)
-
-    c1, c2 = st.columns(2)
-    with c1:
-        st.download_button("⬇️ PNG 다운로드", data=buf_png, file_name=f"style_transfer_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png", mime="image/png")
-    with c2:
-        st.download_button("⬇️ JPG 다운로드", data=buf_jpg, file_name=f"style_transfer_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg", mime="image/jpeg")
+def solarize(img, threshold=128):
+    return ImageOps.solarize(img, threshold)
