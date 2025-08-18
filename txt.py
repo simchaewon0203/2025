@@ -4,7 +4,7 @@ import io
 import colorsys
 import random
 
-st.set_page_config(page_title="🎀 핑크톤 이미지 편집기 20+ 필터", layout="centered")
+st.set_page_config(page_title="🎀 이미지 편집기 필터", layout="centered")
 
 # --- 핑크톤 스타일 ---
 st.markdown("""
