@@ -1,5 +1,5 @@
-import streamlit as st
+streamlit
 from PIL import Image, ImageFilter, ImageOps, ImageEnhance, ImageChops
-import io
-import colorsys
-import random
+io
+colorsys
+random
