@@ -1,5 +1,5 @@
 streamlit
-PIL
-io
-colorsys
-random
+torch
+torchvision
+Pillow
+numpy
