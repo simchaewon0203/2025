@@ -2,7 +2,6 @@ import streamlit as st
 from PIL import Image, ImageFilter, ImageOps, ImageEnhance
 import io, colorsys, random
 import numpy as np
-import cv2
 import face_recognition
 
 st.set_page_config(page_title="🎀 핑크톤 이미지 편집기 확장판", layout="centered")
@@ -52,18 +51,9 @@ def add_noise(img, amount=0.05):
     return img
 
 def gamma_correction(img, gamma=1.0):
-    inv_gamma = 1.0 / gamma
     img = img.convert("RGB")
-    pixels = img.load()
-    width, height = img.size
-    for x in range(width):
-        for y in range(height):
-            r, g, b = pixels[x, y]
-            r = int((r / 255.0) ** inv_gamma * 255)
-            g = int((g / 255.0) ** inv_gamma * 255)
-            b = int((b / 255.0) ** inv_gamma * 255)
-            pixels[x, y] = (r, g, b)
-    return img
+    lut = [min(255, int((i / 255.0) ** gamma * 255)) for i in range(256)]
+    return img.point(lut * 3)
 
 def posterize(img, bits=4):
     return ImageOps.posterize(img, bits)
@@ -98,16 +88,6 @@ def simple_color_temp(img, temp=0):
             pixels[x, y] = (r, g, b)
     return img
 
-def face_smooth(img_pil, intensity=0.5):
-    # 얼굴만 인식 후 스무딩
-    img = np.array(img_pil.convert("RGB"))
-    face_locations = face_recognition.face_locations(img)
-    for (top, right, bottom, left) in face_locations:
-        face = img[top:bottom, left:right]
-        face = cv2.bilateralFilter(face, d=9, sigmaColor=75*intensity, sigmaSpace=75*intensity)
-        img[top:bottom, left:right] = face
-    return Image.fromarray(img)
-
 # ---------------- 메인 ----------------
 
 if uploaded_file:
@@ -115,7 +95,7 @@ if uploaded_file:
     st.image(image, caption="✨ 원본 이미지", use_column_width=True)
 
     filter_option = st.selectbox("🎨 필터 선택", [
-        "없음","흑백","세피아","블러","엠보스","샤픈","컨투어","스무딩",
+        "없음","흑백","세피아","블러","엠보스","엣지 강화","샤픈","컨투어","스무딩",
         "윤곽선","디테일","포스터화","색상 반전","솔라라이즈","노이즈","모션 블러"
     ])
 
@@ -132,7 +112,8 @@ if uploaded_file:
     r_shift = st.slider("🔴 R 이동", -100, 100, 0, 1)
     g_shift = st.slider("🟢 G 이동", -100, 100, 0, 1)
     b_shift = st.slider("🔵 B 이동", -100, 100, 0, 1)
-    apply_face_smooth = st.checkbox("😊 얼굴 스무딩 적용")
+    # 얼굴 스무딩 제거
+    # apply_face_smooth = st.checkbox("😊 얼굴 스무딩 적용 (cv2 미사용)")  # 제거됨
 
     st.markdown("### 🔄 변환 기능")
     rotate_angle = st.selectbox("↪️ 회전", [0, 90, 180, 270])
@@ -165,47 +146,4 @@ if uploaded_file:
     elif filter_option == "포스터화":
         filtered = posterize(filtered, bits=4)
     elif filter_option == "색상 반전":
-        filtered = ImageOps.invert(filtered)
-    elif filter_option == "솔라라이즈":
-        filtered = solarize(filtered, threshold=128)
-    elif filter_option == "노이즈":
-        filtered = add_noise(filtered, amount=0.1)
-    elif filter_option == "모션 블러":
-        filtered = filtered.filter(ImageFilter.GaussianBlur(radius=2))
-
-    # ----------- 보정 적용 -----------
-    filtered = filtered.convert("RGB")
-    filtered = ImageEnhance.Sharpness(filtered).enhance(sharpness_val)
-    filtered = ImageEnhance.Brightness(filtered).enhance(brightness_val)
-    filtered = ImageEnhance.Contrast(filtered).enhance(contrast_val)
-    filtered = ImageEnhance.Color(filtered).enhance(saturation_val)
-    if hue_val != 0.0:
-        filtered = shift_hue(filtered, hue_val)
-    filtered = gamma_correction(filtered, gamma_val)
-    if invert_colors:
-        filtered = ImageOps.invert(filtered)
-    if noise_amount > 0.0:
-        filtered = add_noise(filtered, noise_amount)
-    if color_temp_val != 0:
-        filtered = simple_color_temp(filtered, color_temp_val)
-    if any([r_shift, g_shift, b_shift]):
-        filtered = color_balance(filtered, r_shift, g_shift, b_shift)
-    if apply_face_smooth:
-        filtered = face_smooth(filtered, intensity=0.5)
-
-    # ----------- 변환 적용 -----------
-    if rotate_angle != 0:
-        filtered = filtered.rotate(rotate_angle, expand=True)
-    if flip_horizontal:
-        filtered = ImageOps.mirror(filtered)
-    if flip_vertical:
-        filtered = ImageOps.flip(filtered)
-
-    st.image(filtered, caption="💖 적용된 이미지", use_column_width=True)
-
-    # 다운로드
-    buf = io.BytesIO()
-    filtered.save(buf, format="PNG")
-    st.download_button("📥 이미지 다운로드", buf.getvalue(), "pink_edited_image.png", "image/png")
-else:
-    st.info("📌 이미지를 업로드 해주세요!")
+        filtered = ImageOps.invert(filtered
