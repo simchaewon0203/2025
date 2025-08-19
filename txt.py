@@ -152,4 +152,4 @@ if uploaded_file:
         filtered = filtered.filter(ImageFilter.GaussianBlur(radius=2))
 
     # 보정 적용
-    filtered = ImageEnhance.Sharpness(filtered).
+    filtered = Image
