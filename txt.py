@@ -2,7 +2,6 @@ import streamlit as st
 from PIL import Image, ImageFilter, ImageOps, ImageEnhance
 import io, colorsys, random
 import numpy as np
-import face_recognition
 
 st.set_page_config(page_title="🎀 핑크톤 이미지 편집기 확장판", layout="centered")
 st.title("🎀 핑크톤 이미지 편집기 30+ 기능 💖")
@@ -112,8 +111,6 @@ if uploaded_file:
     r_shift = st.slider("🔴 R 이동", -100, 100, 0, 1)
     g_shift = st.slider("🟢 G 이동", -100, 100, 0, 1)
     b_shift = st.slider("🔵 B 이동", -100, 100, 0, 1)
-    # 얼굴 스무딩 제거
-    # apply_face_smooth = st.checkbox("😊 얼굴 스무딩 적용 (cv2 미사용)")  # 제거됨
 
     st.markdown("### 🔄 변환 기능")
     rotate_angle = st.selectbox("↪️ 회전", [0, 90, 180, 270])
@@ -146,4 +143,13 @@ if uploaded_file:
     elif filter_option == "포스터화":
         filtered = posterize(filtered, bits=4)
     elif filter_option == "색상 반전":
-        filtered = ImageOps.invert(filtered
+        filtered = ImageOps.invert(filtered.convert("RGB"))
+    elif filter_option == "솔라라이즈":
+        filtered = solarize(filtered, threshold=128)
+    elif filter_option == "노이즈":
+        filtered = add_noise(filtered, amount=0.1)
+    elif filter_option == "모션 블러":
+        filtered = filtered.filter(ImageFilter.GaussianBlur(radius=2))
+
+    # 보정 적용
+    filtered = ImageEnhance.Sharpness(filtered).
