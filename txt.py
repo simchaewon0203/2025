@@ -4,7 +4,7 @@ import numpy as np
 import colorsys, io
 
 st.set_page_config(page_title="🎀 핑크톤 이미지 편집기", layout="centered")
-st.title("🎀 핑크톤 이미지 편집기 40+ 기능 💖")
+st.title("🎀공주의 사진 보정 앱💖")
 st.markdown("---")
 
 uploaded_file = st.file_uploader("📤 이미지를 업로드하세요 (PNG, JPG, JPEG)", type=["png", "jpg", "jpeg"])
