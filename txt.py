@@ -1,7 +1,7 @@
 import streamlit as st
 from PIL import Image, ImageFilter, ImageOps, ImageEnhance, ImageDraw, ImageFont
 import numpy as np
-import colorsys, io
+import colorsys, random, io
 
 st.set_page_config(page_title="🎀 핑크톤 이미지 편집기", layout="centered")
 st.title("🎀 핑크톤 이미지 편집기 40+ 기능 💖")
@@ -58,10 +58,10 @@ def color_balance(img, r_shift=0, g_shift=0, b_shift=0):
 def simple_color_temp(img, temp=0):
     return color_balance(img, r_shift=temp*10, b_shift=-temp*10)
 
-# 추가 필터
+# --- 추가 필터 ---
 def pixelate(img, pixel_size=10):
     w, h = img.size
-    img_small = img.resize((max(1,w//pixel_size), max(1,h//pixel_size)), resample=Image.NEAREST)
+    img_small = img.resize((w//pixel_size, h//pixel_size), resample=Image.NEAREST)
     return img_small.resize((w, h), Image.NEAREST)
 
 def sketch(img):
@@ -100,10 +100,9 @@ def vignette(img):
     mask = np.clip(1 - mask, 0, 1)
     arr = np.array(img).astype(np.float32)
     arr *= mask[..., None]
-    arr = np.clip(arr, 0, 255)
     return Image.fromarray(arr.astype("uint8"))
 
-# 편집 기능
+# --- 편집 기능 ---
 def add_text(img, text, pos=(10,10), size=30, color=(255,105,180)):
     draw = ImageDraw.Draw(img)
     try:
@@ -116,7 +115,7 @@ def add_text(img, text, pos=(10,10), size=30, color=(255,105,180)):
 def add_border(img, border=20, color=(255,192,203)):
     return ImageOps.expand(img, border=border, fill=color)
 
-# 메인 앱
+# --- 메인 앱 ---
 if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
     st.image(image, caption="✨ 원본 이미지", use_column_width=True)
@@ -143,7 +142,7 @@ if uploaded_file:
     b_shift = st.slider("🔵 B 이동", -100, 100, 0)
 
     # 변환
-    rotate_angle = st.slider("↪️ 회전 각도", 0, 360, 0)
+    rotate_angle = st.selectbox("↪️ 회전", [0, 90, 180, 270])
     flip_horizontal = st.checkbox("↔️ 좌우 반전")
     flip_vertical = st.checkbox("↕️ 상하 반전")
 
@@ -177,10 +176,47 @@ if uploaded_file:
     elif filter_option == "빨강만 남기기": filtered = isolate_red(filtered)
     elif filter_option == "비네팅": filtered = vignette(filtered)
 
-    # 보정
+    # --- 보정 ---
     filtered = ImageEnhance.Sharpness(filtered).enhance(sharpness_val)
     filtered = ImageEnhance.Brightness(filtered).enhance(brightness_val)
     filtered = ImageEnhance.Contrast(filtered).enhance(contrast_val)
     filtered = ImageEnhance.Color(filtered).enhance(saturation_val)
     filtered = shift_hue(filtered, hue_val)
-    filtered =
+    filtered = gamma_correction(filtered, gamma_val)
+    if invert_colors: filtered = ImageOps.invert(filtered)
+    filtered = simple_color_temp(filtered, temp=color_temp_val)
+    filtered = color_balance(filtered, r_shift, g_shift, b_shift)
+
+    # --- 변환 ---
+    if rotate_angle: filtered = filtered.rotate(rotate_angle, expand=True)
+    if flip_horizontal: filtered = ImageOps.mirror(filtered)
+    if flip_vertical: filtered = ImageOps.flip(filtered)
+
+    # --- 추가 기능 ---
+    if crop_on:
+        w, h = filtered.size
+        filtered = filtered.crop((w*0.1, h*0.1, w*0.9, h*0.9))
+    if resize_on:
+        new_w = st.slider("새 가로 크기", 50, 1000, filtered.size[0])
+        new_h = st.slider("새 세로 크기", 50, 1000, filtered.size[1])
+        filtered = filtered.resize((new_w, new_h))
+    if add_text_on:
+        text = st.text_input("추가할 텍스트", "채원이 작품 💖")
+        filtered = add_text(filtered, text, pos=(30,30))
+    if add_border_on:
+        border_size = st.slider("테두리 두께", 5, 100, 20)
+        filtered = add_border(filtered, border=border_size)
+
+    # --- 결과 출력 ---
+    st.subheader("🖼️ 편집된 이미지")
+    st.image(filtered, use_column_width=True)
+
+    # 다운로드
+    img_byte_arr = io.BytesIO()
+    filtered.save(img_byte_arr, format="PNG")
+    st.download_button(
+        label="💾 편집된 이미지 다운로드",
+        data=img_byte_arr.getvalue(),
+        file_name="edited_image.png",
+        mime="image/png"
+    )
