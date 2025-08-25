@@ -3,71 +3,7 @@ from PIL import Image, ImageFilter, ImageOps, ImageEnhance
 import numpy as np
 import colorsys, io
 
-# --- 하트 터지는 애니메이션 HTML+CSS+JS ---
-heart_animation_html = """
-<style>
-@keyframes pop {
-  0% {
-    opacity: 0;
-    transform: scale(0.5) translateY(0);
-  }
-  50% {
-    opacity: 1;
-    transform: scale(1.2) translateY(-20px);
-  }
-  100% {
-    opacity: 0;
-    transform: scale(0.5) translateY(-40px);
-  }
-}
-.heart-container {
-  position: fixed;
-  top: 20px;
-  left: 50%;
-  transform: translateX(-50%);
-  pointer-events: none;
-  z-index: 9999;
-}
-.heart {
-  position: absolute;
-  font-size: 30px;
-  color: #ff2d55;
-  animation-name: pop;
-  animation-duration: 1s;
-  animation-timing-function: ease-out;
-  animation-iteration-count: infinite;
-  user-select: none;
-}
-</style>
-<div class="heart-container" id="heart-container"></div>
-
-<script>
-const container = document.getElementById('heart-container');
-const hearts = [];
-
-function createHeart() {
-  const heart = document.createElement('div');
-  heart.innerText = '❤️';
-  heart.className = 'heart';
-  heart.style.left = Math.random() * 100 + 'px';
-  heart.style.top = '0px';
-  heart.style.animationDelay = (Math.random() * 1) + 's';
-  container.appendChild(heart);
-  hearts.push(heart);
-
-  setTimeout(() => {
-    container.removeChild(heart);
-    hearts.splice(hearts.indexOf(heart), 1);
-  }, 1000);
-}
-
-setInterval(createHeart, 300);
-</script>
-"""
-
 st.set_page_config(page_title="🎀 핑크톤 이미지 편집기", layout="centered")
-st.markdown(heart_animation_html, unsafe_allow_html=True)
-
 st.title("🎀 핑크톤 이미지 편집기 40+ 기능 💖")
 st.markdown("---")
 
@@ -176,10 +112,12 @@ def crop_to_ratio(img, ratio_w, ratio_h):
     current_ratio = w / h
 
     if current_ratio > target_ratio:
+        # 너무 넓으면 가로 자르기
         new_w = int(h * target_ratio)
         left = (w - new_w) // 2
         img = img.crop((left, 0, left + new_w, h))
     else:
+        # 너무 높으면 세로 자르기
         new_h = int(w / target_ratio)
         top = (h - new_h) // 2
         img = img.crop((0, top, w, top + new_h))
@@ -206,6 +144,7 @@ if uploaded_file:
     st.image(image, caption="✨ 원본 이미지", use_column_width=True)
     st.markdown("---")
 
+    # 필터 선택
     filter_option = st.selectbox("🖌️ 필터 선택", [
         "없음","흑백","세피아","블러","엠보스","엣지 강화","샤픈","컨투어","스무딩",
         "윤곽선","디테일","포스터화","색상 반전","솔라라이즈","노이즈","모션 블러",
@@ -251,7 +190,7 @@ if uploaded_file:
     else:
         border_size = 0
 
-    # 필터 적용
+    # --- 필터 적용 ---
     filtered = image.copy()
     if filter_option == "흑백":
         filtered = ImageOps.grayscale(filtered).convert("RGB")
@@ -294,6 +233,7 @@ if uploaded_file:
     elif filter_option == "비네팅":
         filtered = vignette(filtered)
 
+    # 색조, 감마, 색온도, RGB 이동, 대비, 밝기, 채도 등 보정
     filtered = shift_hue(filtered, hue_val)
     filtered = gamma_correction(filtered, gamma_val)
     filtered = simple_color_temp(filtered, color_temp_val)
@@ -307,6 +247,7 @@ if uploaded_file:
     if invert_colors:
         filtered = ImageOps.invert(filtered)
 
+    # 회전 및 반전
     if rotate_angle != 0:
         filtered = filtered.rotate(rotate_angle, expand=True)
     if flip_horizontal:
@@ -314,6 +255,7 @@ if uploaded_file:
     if flip_vertical:
         filtered = ImageOps.flip(filtered)
 
+    # 크롭 적용
     if crop_on and ratio != "원본 유지":
         w_h_ratio_map = {
             "1:1": (1,1),
@@ -326,9 +268,11 @@ if uploaded_file:
             rw, rh = w_h_ratio_map[ratio]
             filtered = crop_to_ratio(filtered, rw, rh)
 
+    # 리사이즈 적용
     if resize_on:
         filtered = filtered.resize((new_w, new_h))
 
+    # 테두리 추가
     if add_border_on and border_size > 0:
         filtered = add_border(filtered, border=border_size, color=border_color)
 
