@@ -1,5 +1,5 @@
 import streamlit as st
-from PIL import Image, ImageFilter, ImageOps, ImageEnhance, ImageDraw, ImageFont
+from PIL import Image, ImageFilter, ImageOps, ImageEnhance
 import numpy as np
 import colorsys, io
 
@@ -123,6 +123,21 @@ def crop_to_ratio(img, ratio_w, ratio_h):
         img = img.crop((0, top, w, top + new_h))
     return img
 
+# --- 테두리 색상 10가지 ---
+BORDER_COLORS = {
+    "핑크": (255, 192, 203),
+    "라벤더": (230, 230, 250),
+    "민트": (152, 255, 152),
+    "레몬": (255, 250, 205),
+    "하늘": (135, 206, 235),
+    "살구": (255, 218, 185),
+    "연두": (144, 238, 144),
+    "라임": (50, 205, 50),
+    "연보라": (221, 160, 221),
+    "흰색": (255, 255, 255),
+    "검정": (0, 0, 0),
+}
+
 # --- 메인 앱 ---
 if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
@@ -156,9 +171,113 @@ if uploaded_file:
     flip_vertical = st.checkbox("↕️ 상하 반전")
 
     st.markdown("### ✂️ 추가 편집 기능")
-
     crop_on = st.checkbox("크롭 적용")
     if crop_on:
         ratio = st.selectbox("비율 선택", ["원본 유지", "1:1", "4:3", "16:9", "3:4", "9:16"])
     else:
-        ratio = "
+        ratio = "원본 유지"
+
+    resize_on = st.checkbox("리사이즈 적용")
+    if resize_on:
+        new_w = st.slider("새 가로 크기", 50, 1000, image.size[0])
+        new_h = st.slider("새 세로 크기", 50, 1000, image.size[1])
+
+    add_border_on = st.checkbox("테두리 추가")
+    if add_border_on:
+        border_size = st.slider("테두리 두께", 5, 100, 20)
+        border_color_name = st.selectbox("테두리 색상 선택", list(BORDER_COLORS.keys()))
+        border_color = BORDER_COLORS[border_color_name]
+    else:
+        border_size = 0
+
+    # --- 필터 적용 ---
+    filtered = image.copy()
+    if filter_option == "흑백":
+        filtered = ImageOps.grayscale(filtered).convert("RGB")
+    elif filter_option == "세피아":
+        filtered = apply_sepia(filtered)
+    elif filter_option == "블러":
+        filtered = filtered.filter(ImageFilter.BLUR)
+    elif filter_option == "엠보스":
+        filtered = filtered.filter(ImageFilter.EMBOSS)
+    elif filter_option == "엣지 강화":
+        filtered = filtered.filter(ImageFilter.EDGE_ENHANCE)
+    elif filter_option == "샤픈":
+        filtered = filtered.filter(ImageFilter.SHARPEN)
+    elif filter_option == "컨투어":
+        filtered = filtered.filter(ImageFilter.CONTOUR)
+    elif filter_option == "스무딩":
+        filtered = filtered.filter(ImageFilter.SMOOTH)
+    elif filter_option == "윤곽선":
+        filtered = filtered.filter(ImageFilter.FIND_EDGES)
+    elif filter_option == "디테일":
+        filtered = filtered.filter(ImageFilter.DETAIL)
+    elif filter_option == "포스터화":
+        filtered = posterize(filtered, bits=4)
+    elif filter_option == "색상 반전":
+        filtered = ImageOps.invert(filtered)
+    elif filter_option == "솔라라이즈":
+        filtered = solarize(filtered, threshold=128)
+    elif filter_option == "노이즈":
+        filtered = add_noise(filtered, amount=noise_amount)
+    elif filter_option == "픽셀화":
+        filtered = pixelate(filtered, pixel_size=10)
+    elif filter_option == "연필 스케치":
+        filtered = sketch(filtered)
+    elif filter_option == "유화":
+        filtered = oil_painting(filtered, radius=3)
+    elif filter_option == "글리치":
+        filtered = glitch_effect(filtered, shift=5)
+    elif filter_option == "빨강만 남기기":
+        filtered = isolate_red(filtered)
+    elif filter_option == "비네팅":
+        filtered = vignette(filtered)
+
+    # 색조, 감마, 색온도, RGB 이동, 대비, 밝기, 채도 등 보정
+    filtered = shift_hue(filtered, hue_val)
+    filtered = gamma_correction(filtered, gamma_val)
+    filtered = simple_color_temp(filtered, color_temp_val)
+    filtered = color_balance(filtered, r_shift, g_shift, b_shift)
+
+    filtered = ImageEnhance.Sharpness(filtered).enhance(sharpness_val)
+    filtered = ImageEnhance.Brightness(filtered).enhance(brightness_val)
+    filtered = ImageEnhance.Contrast(filtered).enhance(contrast_val)
+    filtered = ImageEnhance.Color(filtered).enhance(saturation_val)
+
+    if invert_colors:
+        filtered = ImageOps.invert(filtered)
+
+    # 회전 및 반전
+    if rotate_angle != 0:
+        filtered = filtered.rotate(rotate_angle, expand=True)
+    if flip_horizontal:
+        filtered = ImageOps.mirror(filtered)
+    if flip_vertical:
+        filtered = ImageOps.flip(filtered)
+
+    # 크롭 적용
+    if crop_on and ratio != "원본 유지":
+        w_h_ratio_map = {
+            "1:1": (1,1),
+            "4:3": (4,3),
+            "16:9": (16,9),
+            "3:4": (3,4),
+            "9:16": (9,16)
+        }
+        if ratio in w_h_ratio_map:
+            rw, rh = w_h_ratio_map[ratio]
+            filtered = crop_to_ratio(filtered, rw, rh)
+
+    # 리사이즈 적용
+    if resize_on:
+        filtered = filtered.resize((new_w, new_h))
+
+    # 테두리 추가
+    if add_border_on and border_size > 0:
+        filtered = add_border(filtered, border=border_size, color=border_color)
+
+    st.markdown("---")
+    st.image(filtered, caption="💖 편집된 이미지", use_column_width=True)
+
+else:
+    st.info("이미지를 업로드해주세요.")
